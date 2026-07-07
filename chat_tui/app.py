@@ -18,6 +18,7 @@ from textual.widgets import Footer, Header, Static
 
 from chat_tui import settings
 from chat_tui.bus import MSG_ALERT, MSG_CHAT, MSG_SEND_STATUS, MSG_STATUS, MSG_VIEWER_COUNT, MessageBus
+from chat_tui.conn_state import ConnState
 from chat_tui.services.kick_client import KickClient
 from chat_tui.services.server_client import ServerClient
 from chat_tui.services.twitch_irc import TwitchIRCClient
@@ -25,6 +26,7 @@ from chat_tui.ui.alert_log import AlertLog
 from chat_tui.ui.chat_feed import ChatFeed
 from chat_tui.ui.composer import Composer
 from chat_tui.ui.settings_modal import SettingsModal
+from chat_tui.ui.status_ticker import StatusTicker
 from chat_tui.ui.viewer_bar import ViewerBar
 
 logger = logging.getLogger(__name__)
@@ -69,8 +71,12 @@ class ChatAggregatorApp(App):
     #chat_feed {
         border: solid $primary;
     }
-    #alert_log {
-        border: solid $secondary;
+    #ticker {
+        height: 1;
+        background: $surface;
+        color: #6b6b7a;
+        padding: 0 1;
+        content-align: left middle;
     }
     #composer {
         height: 3;
@@ -78,10 +84,7 @@ class ChatAggregatorApp(App):
         border-top: solid $primary;
     }
     #status_bar {
-        height: 1;
-        background: $panel;
-        color: #6b6b7a;
-        content-align: left middle;
+        display: none;
     }
     """
 
@@ -112,9 +115,8 @@ class ChatAggregatorApp(App):
         yield Header(show_clock=True)
         with Vertical(id="main"):
             yield ViewerBar(id="viewer_bar")
-            with Horizontal(id="chat_pane"):
-                yield ChatFeed(id="chat_feed")
-                yield AlertLog(id="alert_log")
+            yield ChatFeed(id="chat_feed")
+            yield StatusTicker(id="ticker")
             yield Composer(id="composer")
             yield Static(self.status_text, id="status_bar")
         yield Footer()
@@ -127,6 +129,7 @@ class ChatAggregatorApp(App):
         self._tasks.append(asyncio.create_task(self._twitch_sse_loop()))
         self._apply_settings(self._settings)
         self.query_one("#composer", Composer).focus_input()
+        self._post_ticker("awaiting events — press s for settings", severity="dim")
 
     async def on_unmount(self) -> None:
         self._running = False
@@ -139,18 +142,12 @@ class ChatAggregatorApp(App):
             except asyncio.CancelledError:
                 pass
 
-    def watch_status_text(self, text: str) -> None:
-        try:
-            self.query_one("#status_bar", Static).update(text)
-        except Exception:
-            pass
-
     def action_settings(self) -> None:
         self.push_screen(SettingsModal(), self._on_settings_closed)
 
     def action_clear(self) -> None:
         self.query_one("#chat_feed", ChatFeed).clear()
-        self.query_one("#alert_log", AlertLog).clear()
+        self.query_one("#ticker", StatusTicker).clear()
         self._post_status("chat cleared")
 
     def action_switch_platform(self) -> None:
@@ -241,12 +238,18 @@ class ChatAggregatorApp(App):
         self.query_one("#chat_feed", ChatFeed).add(message)
 
     def _post_alert(self, event: dict[str, Any]) -> None:
-        self.query_one("#alert_log", AlertLog).add(event)
+        text = str(event.get("text") or event.get("eventType") or "event")
+        severity = "error" if "error" in str(event.get("eventType", "")).lower() else "info"
+        self._post_ticker(text, severity=severity)
+
+    def _post_ticker(self, text: str, severity: str = "info") -> None:
+        self.query_one("#ticker", StatusTicker).add(text, severity=severity)
 
     def _set_status(self, payload: dict[str, Any]) -> None:
         text = payload.get("text", "")
         if text:
             self.status_text = text
+            self._post_ticker(text, severity="info")
 
     def _update_viewer(self, payload: dict[str, Any]) -> None:
         platform = payload.get("platform")
@@ -254,15 +257,18 @@ class ChatAggregatorApp(App):
         if platform:
             self.query_one("#viewer_bar", ViewerBar).update_count(platform, count)
 
+    def _set_connection(self, platform: str, state: ConnState) -> None:
+        self.query_one("#viewer_bar", ViewerBar).set_connection(platform, state)
+
     def _on_send_status(self, payload: dict[str, Any]) -> None:
         ok = payload.get("ok")
-        platform = payload.get("platform")
+        platform = str(payload.get("platform") or "?")
         error = payload.get("error")
         text = payload.get("text", "")
         if ok:
-            self._post_alert({"text": f"SENT [{platform.upper()}] {text}", "eventType": "sent"})
+            self._post_ticker(f"SENT [{platform.upper()}] {text}", severity="info")
         else:
-            self._post_alert({"text": f"FAILED [{platform.upper()}] {error or 'unknown'}", "eventType": "error"})
+            self._post_ticker(f"FAILED [{platform.upper()}] {error or 'unknown'}", severity="error")
 
     def _post_status(self, text: str) -> None:
         self.bus.put_nowait(MSG_STATUS, {"text": text})
@@ -277,26 +283,49 @@ class ChatAggregatorApp(App):
         youtube_target = cfg.get("youtubeLiveId", "")
         kick_channel = cfg.get("kickChannel", "")
 
+        # mark configured platforms as connecting
+        for platform, channel in [
+            ("twitch", twitch_channel),
+            ("youtube", youtube_target),
+            ("kick", kick_channel),
+        ]:
+            self._set_connection(platform, ConnState.CONNECTING if channel else ConnState.DISCONNECTED)
+
         if twitch_channel:
-            self.twitch_irc = TwitchIRCClient(
-                twitch_channel,
-                lambda m: self.bus.put_nowait(MSG_CHAT, m),
-            )
-            await self.twitch_irc.start()
-            self._post_status(f"Twitch IRC joined: #{twitch_channel}")
+            try:
+                self.twitch_irc = TwitchIRCClient(
+                    twitch_channel,
+                    lambda m: self.bus.put_nowait(MSG_CHAT, m),
+                )
+                await self.twitch_irc.start()
+                self._set_connection("twitch", ConnState.CONNECTED)
+                self._post_status(f"Twitch IRC joined: #{twitch_channel}")
+            except Exception as exc:
+                self._set_connection("twitch", ConnState.ERROR)
+                self._post_ticker(f"Twitch connect failed: {exc}", severity="error")
 
         if kick_channel:
-            self.kick = KickClient(
-                kick_channel,
-                lambda m: self.bus.put_nowait(MSG_CHAT, m),
-            )
-            await self.kick.start()
-            self._post_status(f"Kick polling: {kick_channel}")
+            try:
+                self.kick = KickClient(
+                    kick_channel,
+                    lambda m: self.bus.put_nowait(MSG_CHAT, m),
+                )
+                await self.kick.start()
+                self._set_connection("kick", ConnState.CONNECTED)
+                self._post_status(f"Kick polling: {kick_channel}")
+            except Exception as exc:
+                self._set_connection("kick", ConnState.ERROR)
+                self._post_ticker(f"Kick connect failed: {exc}", severity="error")
 
         if youtube_target:
-            resolved = await self.server.resolve_youtube_id(youtube_target)
-            self._youtube_live_id = resolved or youtube_target
-            self._post_status(f"YouTube live ID: {self._youtube_live_id}")
+            try:
+                resolved = await self.server.resolve_youtube_id(youtube_target)
+                self._youtube_live_id = resolved or youtube_target
+                self._set_connection("youtube", ConnState.CONNECTED if resolved else ConnState.ERROR)
+                self._post_status(f"YouTube live ID: {self._youtube_live_id}")
+            except Exception as exc:
+                self._set_connection("youtube", ConnState.ERROR)
+                self._post_ticker(f"YouTube resolve failed: {exc}", severity="error")
 
     async def _stop_clients(self) -> None:
         if self.twitch_irc:
@@ -359,14 +388,19 @@ class ChatAggregatorApp(App):
                     ("kick", cfg.get("kickChannel", "")),
                 ]:
                     if channel:
-                        count = await self.server.fetch_viewers(platform, channel)
-                        self.bus.put_nowait(MSG_VIEWER_COUNT, {"platform": platform, "count": count})
+                        try:
+                            count = await self.server.fetch_viewers(platform, channel)
+                            self.bus.put_nowait(MSG_VIEWER_COUNT, {"platform": platform, "count": count})
+                        except Exception as exc:
+                            self._post_ticker(f"viewer poll {platform} failed: {exc}", severity="error")
+                            self._set_connection(platform, ConnState.ERROR)
                 # YouTube viewer count not wired server-side in this build
                 await asyncio.sleep(VIEWER_POLL_SECONDS)
         except asyncio.CancelledError:
             return
         except Exception as exc:
             logger.exception("viewer poll error: %s", exc)
+            self._post_ticker(f"viewer poll loop crashed: {exc}", severity="error")
 
 
 def main() -> None:

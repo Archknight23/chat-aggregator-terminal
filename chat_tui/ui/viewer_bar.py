@@ -1,4 +1,4 @@
-"""Per-platform viewer count bar."""
+"""Per-platform viewer count bar with connection indicators."""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Label
 
+from chat_tui.conn_state import ConnState
 from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE
 
 
 class ViewerBar(Horizontal):
-    """Horizontal bar showing viewer counts per platform."""
+    """Horizontal bar showing connection status and viewer counts per platform."""
 
     DEFAULT_CSS = """
     ViewerBar {
@@ -33,6 +34,7 @@ class ViewerBar(Horizontal):
     """
 
     counts: reactive[dict[str, Any]] = reactive(dict)
+    connections: reactive[dict[str, ConnState]] = reactive(dict)
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -47,34 +49,41 @@ class ViewerBar(Horizontal):
     def watch_counts(self, counts: dict[str, Any]) -> None:
         self._refresh_label()
 
-    def _refresh_label(self) -> None:
-        counts = self.counts
-        total = 0
-        segments: list[tuple[str, str]] = []
+    def watch_connections(self, connections: dict[str, ConnState]) -> None:
+        self._refresh_label()
 
-        for platform, color in [
+    def _refresh_label(self) -> None:
+        total = 0
+        text = Text()
+
+        for i, (platform, color) in enumerate([
             ("twitch", C_TWITCH),
             ("youtube", C_YOUTUBE),
             ("kick", C_KICK),
             ("local", C_LOCAL),
-        ]:
-            value = counts.get(platform)
+        ]):
+            if i:
+                text.append("  |  ", style=C_DIM)
+
+            value = self.counts.get(platform)
+            conn = self.connections.get(platform, ConnState.DISCONNECTED)
             label = platform.upper()
+            icon = conn.icon()
+            icon_style = f"bold {conn.color()}"
+
             if value is None:
-                segments.append((f"{label}: —", C_DIM))
+                count_text = "—"
             else:
                 try:
                     n = int(value)
                     total += n
-                    segments.append((f"{label}: {n:,}", color))
+                    count_text = f"{n:,}"
                 except (TypeError, ValueError):
-                    segments.append((f"{label}: —", C_DIM))
+                    count_text = "—"
 
-        text = Text()
-        for i, (seg, color) in enumerate(segments):
-            if i:
-                text.append("  |  ", style=C_DIM)
-            text.append(seg, style=color)
+            text.append(f"{icon} ", style=icon_style)
+            text.append(f"{label}: {count_text}", style=color)
+
         text.append(f"  :: TOTAL: {total:,}", style=f"bold {C_FG}")
         self._label.update(text)
 
@@ -86,5 +95,11 @@ class ViewerBar(Horizontal):
             new[platform] = value
         self.counts = new
 
+    def set_connection(self, platform: str, state: ConnState) -> None:
+        new = dict(self.connections)
+        new[platform] = state
+        self.connections = new
+
     def clear(self) -> None:
         self.counts = {}
+        self.connections = {}
