@@ -102,7 +102,7 @@ class ChatAggregatorApp(App):
         Binding("q", "quit", "Quit", show=True),
         Binding("s", "settings", "Settings", show=True),
         Binding("c", "clear", "Clear", show=True),
-        Binding("tab", "switch_platform", "Platform", show=True),
+        Binding("tab", "switch_platform", "Platform", show=True, priority=True),
         Binding("ctrl+l", "clear", "Clear", show=False),
     ]
 
