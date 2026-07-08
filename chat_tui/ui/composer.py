@@ -20,16 +20,16 @@ class Composer(Horizontal):
         background: $surface;
         border: solid $secondary;
     }
-    Input {
+    #composer_input {
         width: 1fr;
         background: $panel;
         color: #e8e8f0;
         border: tall $secondary 50%;
     }
-    Input:focus {
+    #composer_input:focus {
         border: tall $secondary;
     }
-    Button {
+    #composer_send {
         width: 12;
         background: $secondary;
         color: #0a0a0f;
