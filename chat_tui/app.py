@@ -92,7 +92,7 @@ class ChatAggregatorApp(App):
         content-align: left middle;
     }
     #composer {
-        height: 3;
+        height: 5;
         background: $panel;
         border: solid $secondary;
     }

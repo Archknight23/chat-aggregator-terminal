@@ -15,10 +15,16 @@ class Composer(Horizontal):
 
     DEFAULT_CSS = """
     Composer {
-        height: 3;
+        height: 5;
         width: 1fr;
         background: $panel;
         border: solid $secondary;
+        align-vertical: middle;
+    }
+    #composer_platform {
+        width: 8;
+        height: 3;
+        content-align: center middle;
     }
     #composer_input {
         width: 1fr;
