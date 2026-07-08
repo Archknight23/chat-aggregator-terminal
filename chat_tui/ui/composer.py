@@ -18,13 +18,22 @@ class Composer(Horizontal):
         height: 3;
         width: 1fr;
         background: $surface;
-        border-top: solid $primary;
+        border: solid $secondary;
     }
     Input {
         width: 1fr;
+        background: $panel;
+        color: #e8e8f0;
+        border: tall $secondary 50%;
+    }
+    Input:focus {
+        border: tall $secondary;
     }
     Button {
         width: 12;
+        background: $secondary;
+        color: #0a0a0f;
+        text-style: bold;
     }
     """
 
