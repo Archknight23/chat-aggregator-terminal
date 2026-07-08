@@ -9,7 +9,6 @@ from rich.text import Text
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Label
 
 from chat_tui.emoji_safe import demojize
 from chat_tui.theme import C_BG, C_DIM, C_FG, C_SYSTEM, platform_color
