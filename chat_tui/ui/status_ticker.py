@@ -9,6 +9,7 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from chat_tui.emoji_safe import demojize
 from chat_tui.theme import C_DIM, C_FG, severity_color
 
 
@@ -61,7 +62,7 @@ class StatusTicker(Static):
             except Exception:
                 pass
         sev = item.get("severity", "info")
-        body = str(item.get("text", ""))
+        body = demojize(str(item.get("text", "")))
 
         text = Text(":: ", style=C_DIM)
         if ts_str:
