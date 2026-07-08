@@ -39,11 +39,19 @@ class ViewerBar(Horizontal):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._label = Label("")
+        self._pulse_on = True
 
     def compose(self) -> ComposeResult:
         yield self._label
 
     def on_mount(self) -> None:
+        self._refresh_label()
+        self.set_interval(0.5, self._pulse_tick)
+
+    def _pulse_tick(self) -> None:
+        if not any(state == ConnState.CONNECTING for state in self.connections.values()):
+            return
+        self._pulse_on = not self._pulse_on
         self._refresh_label()
 
     def watch_counts(self, counts: dict[str, Any]) -> None:
@@ -69,7 +77,10 @@ class ViewerBar(Horizontal):
             conn = self.connections.get(platform, ConnState.DISCONNECTED)
             label = platform.upper()
             icon = conn.icon()
-            icon_style = f"bold {conn.color()}"
+            if conn == ConnState.CONNECTING:
+                icon_style = f"{'bold' if self._pulse_on else 'dim'} {conn.color()}"
+            else:
+                icon_style = f"bold {conn.color()}"
 
             if value is None:
                 count_text = "—"
