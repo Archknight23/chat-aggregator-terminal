@@ -158,16 +158,16 @@ with:
         background: $surface;
         border: solid $secondary;
     }
-    Input {
+    #composer_input {
         width: 1fr;
         background: $panel;
         color: #e8e8f0;
         border: tall $secondary 50%;
     }
-    Input:focus {
+    #composer_input:focus {
         border: tall $secondary;
     }
-    Button {
+    #composer_send {
         width: 12;
         background: $secondary;
         color: #0a0a0f;
@@ -176,32 +176,36 @@ with:
     """
 ```
 
-- [ ] **Step 2: Manually verify (no app.py wiring yet, so use a scratch runner)**
+**Note on selectors:** this targets `#composer_input`/`#composer_send` (the IDs already assigned in `compose()` below) rather than bare `Input`/`Button` type selectors. A bare type selector loses the CSS specificity contest against Textual's own built-in `Input`/`Button` `DEFAULT_CSS` (and against the `.-primary` variant class Textual adds for `Button(..., variant="primary")`) — verified empirically: with bare type selectors, `Input.styles.background` resolved to `$surface` (Textual's own Input default) instead of `$panel`, `Input.styles.border` resolved to Textual's stock focus-blue instead of `$secondary`, and `Button.styles.background` resolved to `$primary` (from the `.-primary` variant rule) instead of `$secondary`. ID selectors outrank both and apply reliably. This also avoids the bare `Input` rule leaking onto unrelated `Input` widgets elsewhere in the app (e.g. `SettingsModal`'s fields), since a type selector is unscoped and matches every `Input` in the app.
+
+- [ ] **Step 2: Manually verify against the real app (not a bare scratch app)**
+
+A bare scratch `App` with only `Composer` mounted does **not** reproduce Textual's real CSS cascade (it's missing the app's `$primary`/`$secondary`/`$panel` variable declarations and doesn't exercise cross-widget specificity the way the full app does). Verify against the actual `ChatAggregatorApp` instead:
 
 ```bash
 cd /home/cfsdexpo/projects/chat-aggregator-tui
 .venv/bin/python -c "
 import asyncio
-from textual.app import App, ComposeResult
+from chat_tui.app import ChatAggregatorApp
 from chat_tui.ui.composer import Composer
 
-class ScratchApp(App):
-    def compose(self) -> ComposeResult:
-        yield Composer(id='composer')
-
 async def main():
-    app = ScratchApp()
-    async with app.run_test() as pilot:
+    app = ChatAggregatorApp()
+    async with app.run_test():
         composer = app.query_one('#composer', Composer)
         input_widget = composer.query_one('Input')
-        print('input background:', input_widget.styles.background)
-        print('input border:', input_widget.styles.border)
+        button_widget = composer.query_one('Button')
+        print('Input background:', input_widget.styles.background)
+        print('Input border:', input_widget.styles.border)
+        print('Button background:', button_widget.styles.background)
 
 asyncio.run(main())
 "
 ```
 
-Expected: prints a non-default background (matching `$panel`, i.e. `#15131c`) and a border tuple that is not empty/`None` — confirming the `Input` no longer relies on undefined theme tokens. This is a structural sanity check, not a substitute for the full visual check in Task 8.
+Expected: `Input background: Color(21, 19, 28)` (`$panel`, `#15131c`), `Input border:` all four edges `Color(255, 107, 26)` (`$secondary`, `#ff6b1a` — the app auto-focuses the input on mount, so this is the `:focus` state), `Button background: Color(255, 107, 26)` (`$secondary`). This is a structural sanity check, not a substitute for the full visual check in Task 8.
+
+Note: `composer.styles.border` will still show a two-toned result at this point (top edge `$primary` purple, other three edges `$secondary` orange) — that's `chat_tui/app.py`'s pre-existing `#composer { border-top: solid $primary; }` ID rule (higher specificity than `Composer`'s own type-selector `border` rule) still in effect. This is expected and resolves itself once Task 8 replaces that rule; it is not something this task can or should fix.
 
 - [ ] **Step 3: Commit**
 
