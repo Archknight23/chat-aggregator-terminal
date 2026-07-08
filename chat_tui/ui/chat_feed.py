@@ -11,6 +11,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label
 
+from chat_tui.emoji_safe import demojize
 from chat_tui.theme import C_BG, C_DIM, C_FG, C_SYSTEM, platform_color
 
 
@@ -24,6 +25,19 @@ class ChatMessage(Widget, can_focus=False):
         background: $surface-darken-1;
         margin: 0 0 1 0;
         padding: 0 1;
+        border-left: thick #6b6b7a;
+    }
+    ChatMessage.platform-twitch {
+        border-left: thick #a970ff;
+    }
+    ChatMessage.platform-youtube {
+        border-left: thick #ff4444;
+    }
+    ChatMessage.platform-kick {
+        border-left: thick #53fc18;
+    }
+    ChatMessage.platform-local {
+        border-left: thick #ff6b1a;
     }
     """
 
@@ -31,11 +45,18 @@ class ChatMessage(Widget, can_focus=False):
         super().__init__(**kwargs)
         self.message = message
 
+    def on_mount(self) -> None:
+        platform = (self.message.get("platform") or "system").lower()
+        if platform in ("twitch", "youtube", "kick", "local"):
+            self.add_class(f"platform-{platform}")
+        self.styles.opacity = 0.0
+        self.styles.animate("opacity", value=1.0, duration=0.2)
+
     def render(self) -> Text:
         msg = self.message
         platform = (msg.get("platform") or "system").lower()
         username = str(msg.get("username") or "—")
-        text = str(msg.get("text") or "")
+        text = demojize(str(msg.get("text") or ""))
         ts = msg.get("timestamp")
 
         ts_str = ""
