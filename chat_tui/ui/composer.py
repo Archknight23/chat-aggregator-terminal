@@ -17,7 +17,7 @@ class Composer(Horizontal):
     Composer {
         height: 3;
         width: 1fr;
-        background: $surface;
+        background: $panel;
         border: solid $secondary;
     }
     #composer_input {

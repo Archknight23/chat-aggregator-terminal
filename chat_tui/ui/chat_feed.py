@@ -55,7 +55,7 @@ class ChatMessage(Widget, can_focus=False):
     def render(self) -> Text:
         msg = self.message
         platform = (msg.get("platform") or "system").lower()
-        username = str(msg.get("username") or "—")
+        username = demojize(str(msg.get("username") or "—"))
         text = demojize(str(msg.get("text") or ""))
         ts = msg.get("timestamp")
 
@@ -100,7 +100,3 @@ class ChatFeed(VerticalScroll):
 
     def clear(self) -> None:
         self.messages = []
-
-    def render_empty(self) -> None:
-        if not self.messages:
-            self.mount(Label(":: CHAT FEED — no messages yet", classes="panel_title"))

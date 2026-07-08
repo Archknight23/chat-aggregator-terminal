@@ -165,6 +165,7 @@ class ChatAggregatorApp(App):
     def action_clear(self) -> None:
         self.query_one("#chat_feed", ChatFeed).clear()
         self.query_one("#ticker", StatusTicker).clear()
+        self.query_one("#alert_log", AlertLog).clear()
         self._post_status("chat cleared")
 
     def action_switch_platform(self) -> None:
