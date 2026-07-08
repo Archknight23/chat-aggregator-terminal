@@ -13,8 +13,7 @@ import httpx
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.reactive import reactive
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header
 
 from chat_tui import settings
 from chat_tui.bus import MSG_ALERT, MSG_CHAT, MSG_SEND_STATUS, MSG_STATUS, MSG_VIEWER_COUNT, MessageBus
@@ -24,6 +23,7 @@ from chat_tui.services.server_client import ServerClient
 from chat_tui.services.twitch_irc import TwitchIRCClient
 from chat_tui.ui.alert_log import AlertLog
 from chat_tui.ui.chat_feed import ChatFeed
+from chat_tui.ui.command_hints import CommandHints
 from chat_tui.ui.composer import Composer
 from chat_tui.ui.settings_modal import SettingsModal
 from chat_tui.ui.status_ticker import StatusTicker
@@ -64,12 +64,19 @@ class ChatAggregatorApp(App):
         color: #e8e8f0;
         border-bottom: solid $primary;
     }
-    #chat_pane {
+    #content_row {
         width: 1fr;
         height: 1fr;
     }
     #chat_feed {
+        width: 1fr;
+        height: 1fr;
         border: solid $primary;
+    }
+    #alert_log {
+        width: 34;
+        height: 1fr;
+        border: solid #ffd23f;
     }
     #ticker {
         height: 1;
@@ -78,13 +85,16 @@ class ChatAggregatorApp(App):
         padding: 0 1;
         content-align: left middle;
     }
+    #hints {
+        height: 1;
+        background: $surface;
+        padding: 0 1;
+        content-align: left middle;
+    }
     #composer {
         height: 3;
         background: $panel;
-        border-top: solid $primary;
-    }
-    #status_bar {
-        display: none;
+        border: solid $secondary;
     }
     """
 
@@ -95,8 +105,6 @@ class ChatAggregatorApp(App):
         Binding("tab", "switch_platform", "Platform", show=True),
         Binding("ctrl+l", "clear", "Clear", show=False),
     ]
-
-    status_text: reactive[str] = reactive(":: CHAT AGGREGATOR TUI")
 
     def __init__(self, server_url: str = DEFAULT_SERVER_URL, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -112,13 +120,22 @@ class ChatAggregatorApp(App):
         self._running = False
 
     def compose(self) -> ComposeResult:
+        chat_feed = ChatFeed(id="chat_feed")
+        chat_feed.border_title = "CHAT FEED"
+        alert_log = AlertLog(id="alert_log")
+        alert_log.border_title = "ALERTS"
+        composer = Composer(id="composer")
+        composer.border_title = "COMPOSER"
+
         yield Header(show_clock=True)
         with Vertical(id="main"):
             yield ViewerBar(id="viewer_bar")
-            yield ChatFeed(id="chat_feed")
+            with Horizontal(id="content_row"):
+                yield chat_feed
+                yield alert_log
             yield StatusTicker(id="ticker")
-            yield Composer(id="composer")
-            yield Static(self.status_text, id="status_bar")
+            yield CommandHints(id="hints")
+            yield composer
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -241,6 +258,7 @@ class ChatAggregatorApp(App):
         text = str(event.get("text") or event.get("eventType") or "event")
         severity = "error" if "error" in str(event.get("eventType", "")).lower() else "info"
         self._post_ticker(text, severity=severity)
+        self.query_one("#alert_log", AlertLog).add(event)
 
     def _post_ticker(self, text: str, severity: str = "info") -> None:
         self.query_one("#ticker", StatusTicker).add(text, severity=severity)
@@ -248,7 +266,6 @@ class ChatAggregatorApp(App):
     def _set_status(self, payload: dict[str, Any]) -> None:
         text = payload.get("text", "")
         if text:
-            self.status_text = text
             self._post_ticker(text, severity="info")
 
     def _update_viewer(self, payload: dict[str, Any]) -> None:
