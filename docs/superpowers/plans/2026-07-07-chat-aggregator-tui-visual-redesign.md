@@ -501,7 +501,7 @@ async def main():
     async with app.run_test():
         ticker = app.query_one('#ticker', StatusTicker)
         ticker.add('raid incoming \U0001F389', severity='info')
-        print(ticker.renderable.plain)
+        print(ticker.render().plain)
 
 asyncio.run(main())
 "
