@@ -10,6 +10,7 @@ from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
 
+from chat_tui.emoji_safe import demojize
 from chat_tui.theme import C_DIM, C_FG, severity_color
 
 
@@ -31,7 +32,7 @@ class AlertRow(Widget, can_focus=False):
 
     def render(self) -> Text:
         event = self.event
-        text = str(event.get("text") or event.get("eventType") or "event")
+        text = demojize(str(event.get("text") or event.get("eventType") or "event"))
         ts = event.get("timestamp")
         ts_str = ""
         if ts:
