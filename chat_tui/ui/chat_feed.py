@@ -11,7 +11,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 
 from chat_tui.emoji_safe import demojize
-from chat_tui.theme import C_BG, C_DIM, C_FG, C_SYSTEM, platform_color
+from chat_tui.theme import C_BG, C_DIM, C_FG, C_SYSTEM, Theme, platform_color
 
 
 class ChatMessage(Widget, can_focus=False):
@@ -38,11 +38,15 @@ class ChatMessage(Widget, can_focus=False):
     ChatMessage.platform-local {
         border-left: thick #ff6b1a;
     }
+    ChatMessage.fade-in {
+        animation: fade-in 0.3s;
+    }
     """
 
-    def __init__(self, message: dict[str, Any], **kwargs) -> None:
+    def __init__(self, message: dict[str, Any], theme: Theme | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.message = message
+        self.theme = theme or None
 
     def on_mount(self) -> None:
         platform = (self.message.get("platform") or "system").lower()
@@ -50,6 +54,10 @@ class ChatMessage(Widget, can_focus=False):
             self.add_class(f"platform-{platform}")
         self.styles.opacity = 0.0
         self.styles.animate("opacity", value=1.0, duration=0.2)
+        # Apply theme border color if available
+        if self.theme:
+            color = platform_color(platform, self.theme)
+            self.styles.border_left = ("thick", color)
 
     def render(self) -> Text:
         msg = self.message
@@ -72,7 +80,7 @@ class ChatMessage(Widget, can_focus=False):
         out = Text()
         if ts_str:
             out.append(f"[{ts_str}] ", style=C_DIM)
-        out.append(f"{username}: ", style=f"bold {platform_color(platform)}")
+        out.append(f"{username}: ", style=f"bold {platform_color(platform, self.theme)}")
         out.append(text, style=C_FG)
         return out
 
@@ -81,6 +89,7 @@ class ChatFeed(VerticalScroll):
     """Scrollable feed of chat messages."""
 
     messages: reactive[list[dict[str, Any]]] = reactive(list)
+    theme: reactive[Theme | None] = reactive(None)
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -90,8 +99,16 @@ class ChatFeed(VerticalScroll):
         # Rebuild children. For large volumes, this is simple and correct.
         self.remove_children()
         for msg in messages:
-            self.mount(ChatMessage(msg))
+            self.mount(ChatMessage(msg, theme=self.theme))
         if messages:
+            self.scroll_end(animate=False)
+
+    def watch_theme(self, theme: Theme | None) -> None:
+        """Refresh all messages when theme changes."""
+        self.remove_children()
+        for msg in self.messages:
+            self.mount(ChatMessage(msg, theme=self.theme))
+        if self.messages:
             self.scroll_end(animate=False)
 
     def add(self, message: dict[str, Any]) -> None:

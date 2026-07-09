@@ -7,6 +7,7 @@ from textual.widgets import Static
 
 C_HINT_SLASH = "#8a6bb0"
 C_HINT_KEY = "#c77a3f"
+C_HINT_THEME = "#00ffff"
 
 
 class CommandHints(Static):
@@ -34,7 +35,9 @@ class CommandHints(Static):
         )
         text.append("   ")
         text.append(
-            "[tab] switch platform  [s] settings  [c] clear",
+            "[tab] platform  [t] theme  [s] settings  [c] clear",
             style=C_HINT_KEY,
         )
+        text.append("   ")
+        text.append("[q] quit", style=C_HINT_THEME)
         return text

@@ -1,0 +1,17 @@
+{
+  "name": "chat-aggregator-tui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "server": "node server/index.js",
+    "check:server": "node --check server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.20.1",
+    "youtube-chat": "^2.2.0"
+  }
+}

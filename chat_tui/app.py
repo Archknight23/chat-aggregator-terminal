@@ -19,8 +19,10 @@ from chat_tui import settings
 from chat_tui.bus import MSG_ALERT, MSG_CHAT, MSG_SEND_STATUS, MSG_STATUS, MSG_VIEWER_COUNT, MessageBus
 from chat_tui.conn_state import ConnState
 from chat_tui.services.kick_client import KickClient
+from chat_tui.services.node_backend import BackendStartupError, NodeBackendSupervisor
 from chat_tui.services.server_client import ServerClient
 from chat_tui.services.twitch_irc import TwitchIRCClient
+from chat_tui.theme import THEME_ORDER, Theme, cycle_theme, get_theme
 from chat_tui.ui.alert_log import AlertLog
 from chat_tui.ui.chat_feed import ChatFeed
 from chat_tui.ui.command_hints import CommandHints
@@ -38,6 +40,8 @@ VIEWER_POLL_SECONDS = 10
 class ChatAggregatorApp(App):
     """Terminal-native chat aggregator."""
 
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
     $primary: #a855f7;
     $secondary: #ff6b1a;
@@ -53,6 +57,7 @@ class ChatAggregatorApp(App):
         background: $panel;
         color: $secondary;
         text-style: bold;
+        border-bottom: solid $primary;
     }
     #main {
         width: 1fr;
@@ -71,12 +76,26 @@ class ChatAggregatorApp(App):
     #chat_feed {
         width: 1fr;
         height: 1fr;
-        border: solid $primary;
+        border: thick $primary;
+        scrollbar-gutter: stable;
+        padding: 0 0;
+    }
+    #chat_feed:focus {
+        border: double $secondary;
+        background: $panel;
+        padding: 0 1;
     }
     #alert_log {
         width: 34;
         height: 1fr;
-        border: solid #ffd23f;
+        border: thick #ffd23f;
+        scrollbar-gutter: stable;
+        padding: 0 0;
+    }
+    #alert_log:focus {
+        border: double #ff6b1a;
+        background: $panel;
+        padding: 0 1;
     }
     #ticker {
         height: 1;
@@ -94,16 +113,29 @@ class ChatAggregatorApp(App):
     #composer {
         height: 5;
         background: $panel;
-        border: solid $secondary;
+        border: thick $secondary;
+        padding: 0 0;
+    }
+    #composer:focus {
+        border: double $secondary;
+        background: $surface;
+        text-style: bold;
+        padding: 0 1;
+    }
+    Footer {
+        background: $panel;
+        color: $primary;
+        border-top: solid $primary;
     }
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("s", "settings", "Settings", show=True),
-        Binding("c", "clear", "Clear", show=True),
-        Binding("tab", "switch_platform", "Platform", show=True, priority=True),
-        Binding("ctrl+l", "clear", "Clear", show=False),
+        Binding("q", "quit", "Quit", show=True, tooltip="Exit the application"),
+        Binding("s", "settings", "Settings", show=True, priority=True, tooltip="Open settings modal"),
+        Binding("c", "clear", "Clear", show=True, priority=True, tooltip="Clear chat, alerts, and ticker"),
+        Binding("tab", "switch_platform", "Platform", show=True, priority=True, tooltip="Cycle through platforms (Local/Twitch/YouTube/Kick)"),
+        Binding("t", "theme", "Theme", show=True, priority=True, tooltip="Cycle through color themes"),
+        Binding("ctrl+l", "clear", "Clear", show=False, priority=True),
     ]
 
     def __init__(self, server_url: str = DEFAULT_SERVER_URL, **kwargs) -> None:
@@ -112,12 +144,15 @@ class ChatAggregatorApp(App):
         self.title = "CHAT AGGREGATOR"
         self.bus = MessageBus()
         self.server = ServerClient(server_url)
+        self.backend = NodeBackendSupervisor(server_url)
         self.twitch_irc: TwitchIRCClient | None = None
         self.kick: KickClient | None = None
         self._tasks: list[asyncio.Task] = []
         self._settings = settings.load_settings()
         self._youtube_live_id: str | None = None
         self._running = False
+        self._theme_name = "frutiger_aero"
+        self._theme = get_theme(self._theme_name)
 
     def compose(self) -> ComposeResult:
         chat_feed = ChatFeed(id="chat_feed")
@@ -140,18 +175,29 @@ class ChatAggregatorApp(App):
 
     async def on_mount(self) -> None:
         await self.server.start()
+        try:
+            backend_state = await self.backend.ensure_running(self.server)
+        except BackendStartupError as exc:
+            backend_state = f"error: {exc}"
         self._running = True
         self._tasks.append(asyncio.create_task(self._bus_pump()))
         self._tasks.append(asyncio.create_task(self._viewer_poll_loop()))
         self._tasks.append(asyncio.create_task(self._twitch_sse_loop()))
         self._apply_settings(self._settings)
         self.query_one("#composer", Composer).focus_input()
+        if backend_state == "started":
+            self._post_ticker("local backend started", severity="info")
+        elif backend_state == "existing":
+            self._post_ticker("local backend already running", severity="dim")
+        else:
+            self._post_ticker(f"backend unavailable: {backend_state}", severity="error")
         self._post_ticker("awaiting events — press s for settings", severity="dim")
 
     async def on_unmount(self) -> None:
         self._running = False
         await self._stop_clients()
         await self.server.stop()
+        await self.backend.stop()
         for task in self._tasks:
             task.cancel()
             try:
@@ -170,6 +216,33 @@ class ChatAggregatorApp(App):
 
     def action_switch_platform(self) -> None:
         self.query_one("#composer", Composer).action_switch_platform()
+
+    def action_theme(self) -> None:
+        """Cycle to the next theme."""
+        self._theme_name, self._theme = cycle_theme(self._theme_name)
+        self._apply_theme()
+        self._post_ticker(f"theme → {self._theme.name}", severity="info")
+
+    def _apply_theme(self) -> None:
+        """Apply the current theme by updating widget styles."""
+        t = self._theme
+        
+        # Update widget themes
+        self.query_one("#chat_feed", ChatFeed).theme = self._theme
+        self.query_one("#viewer_bar", ViewerBar).theme = self._theme
+        self.query_one("#composer", Composer).theme = self._theme
+        
+        # Update focused widget styles dynamically
+        focused = self.focused
+        if focused:
+            focused.styles.border = ("double", t.accent_primary)
+        
+        # Update header title to show theme
+        self.title = f"CHAT AGGREGATOR — {t.name.upper()}"
+        self.sub_title = t.description
+        
+        # Refresh the ticker to show theme change
+        self.query_one("#ticker", StatusTicker).add(f"theme → {t.name}", severity="info")
 
     def _on_settings_closed(self, result: dict[str, Any] | None) -> None:
         if result is not None:

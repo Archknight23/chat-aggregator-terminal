@@ -83,6 +83,22 @@ class ServerClient:
         except Exception as exc:
             return {"error": str(exc)}
 
+    async def twitch_status(self) -> dict[str, Any] | None:
+        try:
+            r = await self.http.get("/api/twitch/status")
+            if r.status_code == 200:
+                return r.json()
+        except Exception as exc:
+            logger.debug("twitch status failed: %s", exc)
+        return None
+
+    async def twitch_logout(self) -> dict[str, Any]:
+        try:
+            r = await self.http.post("/api/twitch/logout")
+            return {"ok": r.status_code == 200}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     async def sse_stream(self, path: str) -> Any:
         """Async generator yielding SSE data payloads from the server."""
         backoff = 1.0

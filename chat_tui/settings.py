@@ -21,6 +21,7 @@ def default_settings() -> dict[str, Any]:
         "kickChannel": "",
         "twitchEventsEnabled": False,
         "twitchClientId": "",
+        "twitchClientSecret": "",
         "twitchSystemName": DEFAULT_TWITCH_SYSTEM_NAME,
         "twitchRequestedScopes": DEFAULT_TWITCH_SCOPES,
     }
@@ -55,6 +56,7 @@ def normalize(settings: dict[str, Any]) -> dict[str, Any]:
         "kickChannel": str(settings.get("kickChannel") or "").strip(),
         "twitchEventsEnabled": bool(settings.get("twitchEventsEnabled")),
         "twitchClientId": str(settings.get("twitchClientId") or "").strip(),
+        "twitchClientSecret": str(settings.get("twitchClientSecret") or "").strip(),
         "twitchSystemName": str(settings.get("twitchSystemName") or DEFAULT_TWITCH_SYSTEM_NAME).strip(),
         "twitchRequestedScopes": str(settings.get("twitchRequestedScopes") or DEFAULT_TWITCH_SCOPES).strip(),
     }

@@ -7,7 +7,7 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Button, Input, Static
 
-from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE
+from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE, Theme
 
 
 class Composer(Horizontal):
@@ -61,6 +61,7 @@ class Composer(Horizontal):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._platform = "local"
+        self._theme: Theme | None = None
 
     BINDINGS = [
         Binding("escape", "blur", "Blur", show=False),
@@ -91,8 +92,13 @@ class Composer(Horizontal):
         self._update_label()
 
     def _update_label(self) -> None:
-        for key, label, color in self.PLATFORMS:
+        theme = self._theme
+        for key, label, default_color in self.PLATFORMS:
             if key == self._platform:
+                color = theme.platform_local if theme and key == "local" else \
+                        theme.platform_twitch if theme and key == "twitch" else \
+                        theme.platform_youtube if theme and key == "youtube" else \
+                        theme.platform_kick if theme and key == "kick" else default_color
                 self._selector_label.update(f"[{color}]{label}[/{color}]")
                 return
 
@@ -114,3 +120,12 @@ class Composer(Horizontal):
         if platform in {p[0] for p in self.PLATFORMS}:
             self._platform = platform
             self._update_label()
+
+    @property
+    def theme(self) -> Theme | None:
+        return self._theme
+
+    @theme.setter
+    def theme(self, value: Theme | None) -> None:
+        self._theme = value
+        self._update_label()

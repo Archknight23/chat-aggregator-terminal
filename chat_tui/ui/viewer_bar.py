@@ -11,7 +11,7 @@ from textual.reactive import reactive
 from textual.widgets import Label
 
 from chat_tui.conn_state import ConnState
-from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE
+from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE, Theme
 
 
 class ViewerBar(Horizontal):
@@ -35,6 +35,7 @@ class ViewerBar(Horizontal):
 
     counts: reactive[dict[str, Any]] = reactive(dict)
     connections: reactive[dict[str, ConnState]] = reactive(dict)
+    theme: reactive[Theme | None] = reactive(None)
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -60,16 +61,23 @@ class ViewerBar(Horizontal):
     def watch_connections(self, connections: dict[str, ConnState]) -> None:
         self._refresh_label()
 
+    def watch_theme(self, theme: Theme | None) -> None:
+        """Refresh label when theme changes."""
+        self._refresh_label()
+
     def _refresh_label(self) -> None:
         total = 0
         text = Text()
 
-        for i, (platform, color) in enumerate([
-            ("twitch", C_TWITCH),
-            ("youtube", C_YOUTUBE),
-            ("kick", C_KICK),
-            ("local", C_LOCAL),
-        ]):
+        theme = self.theme
+        platform_colors = {
+            "twitch": theme.platform_twitch if theme else C_TWITCH,
+            "youtube": theme.platform_youtube if theme else C_YOUTUBE,
+            "kick": theme.platform_kick if theme else C_KICK,
+            "local": theme.platform_local if theme else C_LOCAL,
+        }
+
+        for i, (platform, color) in enumerate(platform_colors.items()):
             if i:
                 text.append("  |  ", style=C_DIM)
 
@@ -95,7 +103,9 @@ class ViewerBar(Horizontal):
             text.append(f"{icon} ", style=icon_style)
             text.append(f"{label}: {count_text}", style=color)
 
-        text.append(f"  :: TOTAL: {total:,}", style=f"bold {C_FG}")
+        # Use theme accent for total if available
+        total_color = theme.accent_primary if theme else C_FG
+        text.append(f"  :: TOTAL: {total:,}", style=f"bold {total_color}")
         self._label.update(text)
 
     def update_count(self, platform: str, value: int | None) -> None:
