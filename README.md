@@ -244,7 +244,9 @@ Forked from [bertugfahriozer/chat-aggregator](https://github.com/bertugfahriozer
 
 ## License
 
-Property of The Chaos Foundry Tech Division. See repository for any additional license files.
+MIT License. See [LICENSE](LICENSE) for details.
+
+Property of The Chaos Foundry Tech Division — but like, the fun kind where you can actually use it.
 
 ---
 
