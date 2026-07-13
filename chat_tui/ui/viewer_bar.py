@@ -41,6 +41,7 @@ class ViewerBar(Horizontal):
         super().__init__(**kwargs)
         self._label = Label("")
         self._pulse_on = True
+        self._compact = False
 
     def compose(self) -> ComposeResult:
         yield self._label
@@ -79,11 +80,13 @@ class ViewerBar(Horizontal):
 
         for i, (platform, color) in enumerate(platform_colors.items()):
             if i:
-                text.append("  |  ", style=C_DIM)
+                text.append(" | " if self._compact else "  |  ", style=C_DIM)
 
             value = self.counts.get(platform)
             conn = self.connections.get(platform, ConnState.DISCONNECTED)
             label = platform.upper()
+            if self._compact:
+                label = {"twitch": "TW", "youtube": "YT", "kick": "K", "local": "L"}[platform]
             icon = conn.icon()
             if conn == ConnState.CONNECTING:
                 icon_style = f"{'bold' if self._pulse_on else 'dim'} {conn.color()}"
@@ -105,8 +108,16 @@ class ViewerBar(Horizontal):
 
         # Use theme accent for total if available
         total_color = theme.accent_primary if theme else C_FG
-        text.append(f"  :: TOTAL: {total:,}", style=f"bold {total_color}")
+        text.append(
+            f" | Σ {total:,}" if self._compact else f"  :: TOTAL: {total:,}",
+            style=f"bold {total_color}",
+        )
         self._label.update(text)
+
+    def set_compact(self, compact: bool) -> None:
+        if compact != self._compact:
+            self._compact = compact
+            self._refresh_label()
 
     def update_count(self, platform: str, value: int | None) -> None:
         new = dict(self.counts)

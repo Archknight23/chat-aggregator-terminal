@@ -24,8 +24,9 @@ class SettingsModal(ModalScreen):
         grid-size: 2;
         grid-gutter: 1 2;
         padding: 1 2;
-        width: 90;
-        height: auto;
+        width: 90%;
+        max-width: 90;
+        height: 90%;
         border: thick $background 80%;
         background: $surface;
     }
@@ -33,6 +34,19 @@ class SettingsModal(ModalScreen):
         column-span: 2;
         text-align: center;
         text-style: bold;
+    }
+    SettingsModal Input {
+        background: #15131c;
+        color: #e8e8f0;
+        border: tall #6b6b7a;
+    }
+    SettingsModal Input:focus {
+        background: #0a0a0f;
+        color: #ffffff;
+        border: tall $secondary;
+    }
+    SettingsModal Checkbox:focus {
+        border: tall $secondary;
     }
     #twitch_auth_row {
         column-span: 2;
@@ -87,13 +101,14 @@ class SettingsModal(ModalScreen):
                     yield Button("Status", id="twitch_auth_status_btn")
                     yield Button("Logout", id="twitch_auth_logout", variant="warning")
             with Horizontal(id="settings_buttons"):
-                yield Button("Save & Start", id="settings_save", variant="primary")
+                yield Button("Save & Connect", id="settings_save", variant="primary")
                 yield Button("Cancel", id="settings_cancel")
 
     def on_mount(self) -> None:
         # Pull a fresh status snapshot when the modal opens so the user sees
         # the real server state, not the stale settings file.
         self.run_worker(self._refresh_status(), exclusive=False)
+        self.call_after_refresh(self.query_one("#twitchChannel", Input).focus)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id

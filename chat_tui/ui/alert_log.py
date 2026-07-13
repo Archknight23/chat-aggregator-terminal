@@ -62,14 +62,23 @@ class AlertLog(VerticalScroll):
         self._max_rows = 200
 
     def watch_events(self, events: list[dict[str, Any]]) -> None:
-        self.remove_children()
-        for event in events:
-            self.mount(AlertRow(event))
-        if events:
-            self.scroll_end(animate=False)
+        if not events:
+            self.remove_children()
 
     def add(self, event: dict[str, Any]) -> None:
-        self.events = (self.events + [event])[-self._max_rows :]
+        events = self.events + [event]
+        overflow = max(0, len(events) - self._max_rows)
+        self.events = events[overflow:]
+        for child in list(self.children)[:overflow]:
+            child.remove()
+        self.mount(AlertRow(event))
+        self.call_after_refresh(self._trim_children)
+        self.call_after_refresh(self.scroll_end, animate=False)
+
+    def _trim_children(self) -> None:
+        overflow = max(0, len(self.children) - self._max_rows)
+        for child in list(self.children)[:overflow]:
+            child.remove()
 
     def clear(self) -> None:
         self.events = []

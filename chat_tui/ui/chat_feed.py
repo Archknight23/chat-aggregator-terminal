@@ -38,9 +38,6 @@ class ChatMessage(Widget, can_focus=False):
     ChatMessage.platform-local {
         border-left: thick #ff6b1a;
     }
-    ChatMessage.fade-in {
-        animation: fade-in 0.3s;
-    }
     """
 
     def __init__(self, message: dict[str, Any], theme: Theme | None = None, **kwargs) -> None:
@@ -96,12 +93,9 @@ class ChatFeed(VerticalScroll):
         self._max_rows = 500
 
     def watch_messages(self, messages: list[dict[str, Any]]) -> None:
-        # Rebuild children. For large volumes, this is simple and correct.
-        self.remove_children()
-        for msg in messages:
-            self.mount(ChatMessage(msg, theme=self.theme))
-        if messages:
-            self.scroll_end(animate=False)
+        """Synchronize bulk replacements such as clear or theme refresh."""
+        if not messages:
+            self.remove_children()
 
     def watch_theme(self, theme: Theme | None) -> None:
         """Refresh all messages when theme changes."""
@@ -112,7 +106,19 @@ class ChatFeed(VerticalScroll):
             self.scroll_end(animate=False)
 
     def add(self, message: dict[str, Any]) -> None:
-        self.messages = (self.messages + [message])[-self._max_rows :]
+        messages = self.messages + [message]
+        overflow = max(0, len(messages) - self._max_rows)
+        self.messages = messages[overflow:]
+        for child in list(self.children)[:overflow]:
+            child.remove()
+        self.mount(ChatMessage(message, theme=self.theme))
+        self.call_after_refresh(self._trim_children)
+        self.call_after_refresh(self.scroll_end, animate=False)
+
+    def _trim_children(self) -> None:
+        overflow = max(0, len(self.children) - self._max_rows)
+        for child in list(self.children)[:overflow]:
+            child.remove()
 
     def clear(self) -> None:
         self.messages = []

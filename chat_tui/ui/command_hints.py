@@ -24,18 +24,26 @@ class CommandHints(Static):
     """
 
     def on_mount(self) -> None:
+        self._compact = False
+        self.update(self._build_text())
+
+    def set_compact(self, compact: bool) -> None:
+        self._compact = compact
         self.update(self._build_text())
 
     def _build_text(self) -> Text:
         text = Text()
         text.append(":: ", style="#6b6b7a")
+        if getattr(self, "_compact", False):
+            text.append("Tab platform  •  F2 settings  •  Ctrl+L clear", style=C_HINT_KEY)
+            return text
         text.append(
             "/settings  /clear  /raid <channel>  /platform <name>",
             style=C_HINT_SLASH,
         )
         text.append("   ")
         text.append(
-            "[tab] platform  [t] theme  [s] settings  [c] clear",
+            "[tab] platform  [t] theme  [F2] settings  [ctrl+l] clear",
             style=C_HINT_KEY,
         )
         text.append("   ")

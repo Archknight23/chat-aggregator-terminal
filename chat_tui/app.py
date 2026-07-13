@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import sys
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ import httpx
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 from textual.widgets import Footer, Header
 
 from chat_tui import settings
@@ -132,6 +135,7 @@ class ChatAggregatorApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True, tooltip="Exit the application"),
         Binding("s", "settings", "Settings", show=True, priority=True, tooltip="Open settings modal"),
+        Binding("f2", "settings", "Settings", show=False, priority=True),
         Binding("c", "clear", "Clear", show=True, priority=True, tooltip="Clear chat, alerts, and ticker"),
         Binding("tab", "switch_platform", "Platform", show=True, priority=True, tooltip="Cycle through platforms (Local/Twitch/YouTube/Kick)"),
         Binding("t", "theme", "Theme", show=True, priority=True, tooltip="Cycle through color themes"),
@@ -148,8 +152,12 @@ class ChatAggregatorApp(App):
         self.twitch_irc: TwitchIRCClient | None = None
         self.kick: KickClient | None = None
         self._tasks: list[asyncio.Task] = []
+        self._settings_task: asyncio.Task | None = None
+        self._youtube_task: asyncio.Task | None = None
         self._settings = settings.load_settings()
         self._youtube_live_id: str | None = None
+        self._seen_message_ids: set[str] = set()
+        self._message_id_order: deque[str] = deque(maxlen=2_000)
         self._running = False
         self._theme_name = "frutiger_aero"
         self._theme = get_theme(self._theme_name)
@@ -195,6 +203,9 @@ class ChatAggregatorApp(App):
 
     async def on_unmount(self) -> None:
         self._running = False
+        await self._cancel_task(self._settings_task)
+        self._settings_task = None
+        await self._stop_youtube()
         await self._stop_clients()
         await self.server.stop()
         await self.backend.stop()
@@ -222,6 +233,17 @@ class ChatAggregatorApp(App):
         self._theme_name, self._theme = cycle_theme(self._theme_name)
         self._apply_theme()
         self._post_ticker(f"theme → {self._theme.name}", severity="info")
+
+    def on_resize(self, event: Resize) -> None:
+        """Keep core chat and composer usable on narrow terminals."""
+        try:
+            compact = event.size.width < 100
+            self.query_one("#alert_log", AlertLog).display = not compact
+            self.query_one("#hints", CommandHints).set_compact(compact)
+            self.query_one("#viewer_bar", ViewerBar).set_compact(event.size.width < 80)
+        except Exception:
+            # Resize may arrive before the widget tree has mounted.
+            pass
 
     def _apply_theme(self) -> None:
         """Apply the current theme by updating widget styles."""
@@ -258,7 +280,7 @@ class ChatAggregatorApp(App):
                 "username": "me",
                 "text": event.text,
                 "platform": "local",
-                "timestamp": int(asyncio.get_event_loop().time() * 1000),
+                "timestamp": int(time.time() * 1000),
             })
             return
         self._post_status(f"sending → {event.platform}…")
@@ -283,9 +305,12 @@ class ChatAggregatorApp(App):
             self._post_alert({"text": f"Unknown command: /{cmd}", "eventType": "error"})
 
     async def _send_outbound(self, platform: str, text: str) -> None:
-        channel = ""
-        if platform == "twitch":
-            channel = self._settings.get("twitchChannel", "")
+        channel_keys = {
+            "twitch": "twitchChannel",
+            "youtube": "youtubeLiveId",
+            "kick": "kickChannel",
+        }
+        channel = self._settings.get(channel_keys.get(platform, ""), "")
         result = await self.server.send_message(platform, text, channel)
         ok = bool(result.get("ok"))
         self.bus.put_nowait(
@@ -326,7 +351,21 @@ class ChatAggregatorApp(App):
                 logger.exception("bus pump error: %s", exc)
 
     def _post_chat(self, message: dict[str, Any]) -> None:
+        if self._is_duplicate_message(message):
+            return
         self.query_one("#chat_feed", ChatFeed).add(message)
+
+    def _is_duplicate_message(self, message: dict[str, Any]) -> bool:
+        message_id = message.get("id")
+        if message_id:
+            dedupe_key = f"{message.get('platform', 'unknown')}:{message_id}"
+            if dedupe_key in self._seen_message_ids:
+                return True
+            if len(self._message_id_order) == self._message_id_order.maxlen:
+                self._seen_message_ids.discard(self._message_id_order[0])
+            self._message_id_order.append(dedupe_key)
+            self._seen_message_ids.add(dedupe_key)
+        return False
 
     def _post_alert(self, event: dict[str, Any]) -> None:
         text = str(event.get("text") or event.get("eventType") or "event")
@@ -365,9 +404,12 @@ class ChatAggregatorApp(App):
         self.bus.put_nowait(MSG_STATUS, {"text": text})
 
     def _apply_settings(self, cfg: dict[str, Any]) -> None:
-        asyncio.create_task(self._apply_settings_async(cfg))
+        if self._settings_task and not self._settings_task.done():
+            self._settings_task.cancel()
+        self._settings_task = asyncio.create_task(self._apply_settings_async(cfg))
 
     async def _apply_settings_async(self, cfg: dict[str, Any]) -> None:
+        await self._stop_youtube()
         await self._stop_clients()
 
         twitch_channel = cfg.get("twitchChannel", "")
@@ -411,9 +453,14 @@ class ChatAggregatorApp(App):
         if youtube_target:
             try:
                 resolved = await self.server.resolve_youtube_id(youtube_target)
-                self._youtube_live_id = resolved or youtube_target
-                self._set_connection("youtube", ConnState.CONNECTED if resolved else ConnState.ERROR)
-                self._post_status(f"YouTube live ID: {self._youtube_live_id}")
+                if not resolved:
+                    self._set_connection("youtube", ConnState.ERROR)
+                    self._post_ticker("YouTube stream is not live or could not be resolved", severity="error")
+                else:
+                    self._youtube_live_id = resolved
+                    self._set_connection("youtube", ConnState.CONNECTED)
+                    self._post_status(f"YouTube live ID: {self._youtube_live_id}")
+                    self._youtube_task = asyncio.create_task(self._youtube_sse_loop(resolved))
             except Exception as exc:
                 self._set_connection("youtube", ConnState.ERROR)
                 self._post_ticker(f"YouTube resolve failed: {exc}", severity="error")
@@ -425,6 +472,22 @@ class ChatAggregatorApp(App):
         if self.kick:
             await self.kick.stop()
             self.kick = None
+
+    async def _stop_youtube(self) -> None:
+        task = self._youtube_task
+        self._youtube_task = None
+        self._youtube_live_id = None
+        await self._cancel_task(task)
+
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task | None) -> None:
+        if not task or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def _twitch_sse_loop(self) -> None:
         """Consume Twitch EventSub SSE from server."""
@@ -449,7 +512,7 @@ class ChatAggregatorApp(App):
                         {
                             "text": text,
                             "eventType": event_type,
-                            "timestamp": data.get("timestamp") or int(asyncio.get_event_loop().time() * 1000),
+                            "timestamp": data.get("timestamp") or int(time.time() * 1000),
                         },
                     )
         except asyncio.CancelledError:
@@ -468,6 +531,33 @@ class ChatAggregatorApp(App):
             return f"REWARD — {user} redeemed {reward}"
         return f"EVENT — {event_type}"
 
+    async def _youtube_sse_loop(self, live_id: str) -> None:
+        """Consume YouTube live chat SSE from server."""
+        try:
+            async for data in self.server.sse_stream(f"/api/youtube/sse?liveId={live_id}"):
+                if not self._running:
+                    return
+                if data.get("_disconnected"):
+                    continue
+                # Server broadcasts chat payload directly: {id, username, text, timestamp}
+                username = data.get("username", "—")
+                text = data.get("text", "")
+                if text and username:
+                    self.bus.put_nowait(
+                        MSG_CHAT,
+                        {
+                            "username": username,
+                            "text": text,
+                            "platform": "youtube",
+                            "timestamp": data.get("timestamp") or int(time.time() * 1000),
+                            "id": data.get("id"),
+                        },
+                    )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.exception("youtube sse loop error: %s", exc)
+
     async def _viewer_poll_loop(self) -> None:
         """Poll viewer counts every 10 seconds."""
         try:
@@ -485,7 +575,14 @@ class ChatAggregatorApp(App):
                         except Exception as exc:
                             self._post_ticker(f"viewer poll {platform} failed: {exc}", severity="error")
                             self._set_connection(platform, ConnState.ERROR)
-                # YouTube viewer count not wired server-side in this build
+                # YouTube viewer count polling
+                if self._youtube_live_id:
+                    try:
+                        count = await self.server.fetch_viewers("youtube", self._youtube_live_id)
+                        self.bus.put_nowait(MSG_VIEWER_COUNT, {"platform": "youtube", "count": count})
+                    except Exception as exc:
+                        self._post_ticker(f"viewer poll youtube failed: {exc}", severity="error")
+                        self._set_connection("youtube", ConnState.ERROR)
                 await asyncio.sleep(VIEWER_POLL_SECONDS)
         except asyncio.CancelledError:
             return
@@ -495,10 +592,14 @@ class ChatAggregatorApp(App):
 
 
 def main() -> None:
+    import tempfile
+    log_dir = Path(tempfile.gettempdir())
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "chat-aggregator-tui.log"
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.FileHandler("/tmp/chat-aggregator-tui.log", mode="a")],
+        handlers=[logging.FileHandler(log_file, mode="a")],
     )
     app = ChatAggregatorApp()
     app.run()

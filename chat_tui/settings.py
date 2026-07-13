@@ -4,13 +4,34 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 DEFAULT_TWITCH_SYSTEM_NAME = "CHAOSFOUNDRY // SYS"
 DEFAULT_TWITCH_SCOPES = "channel:read:redemptions channel:manage:raids user:write:chat"
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "chat-aggregator-tui"
+
+def _get_config_dir() -> Path:
+    """Return platform-appropriate config directory."""
+    if sys.platform == "win32":
+        # Windows: %APPDATA%\chat-aggregator-tui
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "chat-aggregator-tui"
+        return Path.home() / ".config" / "chat-aggregator-tui"
+    elif sys.platform == "darwin":
+        # macOS: ~/Library/Application Support/chat-aggregator-tui
+        return Path.home() / "Library" / "Application Support" / "chat-aggregator-tui"
+    else:
+        # Linux and others: XDG_CONFIG_HOME or ~/.config
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            return Path(xdg) / "chat-aggregator-tui"
+        return Path.home() / ".config" / "chat-aggregator-tui"
+
+
+CONFIG_DIR = _get_config_dir()
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 

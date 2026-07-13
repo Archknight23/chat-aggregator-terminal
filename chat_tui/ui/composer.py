@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.message import Message
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Input
 
 from chat_tui.theme import C_DIM, C_FG, C_KICK, C_LOCAL, C_TWITCH, C_YOUTUBE, Theme
 
@@ -22,9 +22,12 @@ class Composer(Horizontal):
         align-vertical: middle;
     }
     #composer_platform {
-        width: 8;
+        width: 10;
+        min-width: 10;
         height: 3;
         content-align: center middle;
+        background: $panel;
+        border: none;
     }
     #composer_input {
         width: 1fr;
@@ -36,7 +39,8 @@ class Composer(Horizontal):
         border: tall $secondary;
     }
     #composer_send {
-        width: 12;
+        width: 10;
+        min-width: 10;
         background: $secondary;
         color: #0a0a0f;
         text-style: bold;
@@ -71,8 +75,9 @@ class Composer(Horizontal):
         self.screen.focus_next()
 
     def compose(self):
-        self._selector_label = Static("LOCAL", id="composer_platform")
-        self._input = Input(placeholder="Type a message… (Tab to switch platform)", id="composer_input")
+        self._selector_label = Button("LOCAL", id="composer_platform")
+        self._selector_label.tooltip = "Change destination"
+        self._input = Input(placeholder="Message LOCAL", id="composer_input", max_length=500)
         yield self._selector_label
         yield self._input
         yield Button("SEND", id="composer_send", variant="primary")
@@ -80,6 +85,9 @@ class Composer(Horizontal):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "composer_send":
             self._submit()
+        elif event.button.id == "composer_platform":
+            self.action_switch_platform()
+            self.focus_input()
 
     def on_input_submitted(self) -> None:
         self._submit()
@@ -99,7 +107,9 @@ class Composer(Horizontal):
                         theme.platform_twitch if theme and key == "twitch" else \
                         theme.platform_youtube if theme and key == "youtube" else \
                         theme.platform_kick if theme and key == "kick" else default_color
-                self._selector_label.update(f"[{color}]{label}[/{color}]")
+                self._selector_label.label = label
+                self._selector_label.styles.color = color
+                self._input.placeholder = f"Message {label}"
                 return
 
     def _submit(self) -> None:
@@ -108,6 +118,7 @@ class Composer(Horizontal):
             return
         self.post_message(self.SendMessage(self._platform, text))
         self._input.value = ""
+        self.focus_input()
 
     @property
     def platform(self) -> str:

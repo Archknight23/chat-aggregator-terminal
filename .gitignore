@@ -10,3 +10,6 @@ config.json
 *.log
 .DS_Store
 .superpowers/
+node_modules/
+server/.twitch-auth.json
+server/.chat-aggregator-proxy.log

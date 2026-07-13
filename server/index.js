@@ -961,6 +961,42 @@ async function fetchKickViewers(channel) {
   }
 }
 
+async function fetchYoutubeViewers(videoId) {
+  // YouTube viewer count requires scraping the live page or using the Data API
+  // For now, we'll scrape the initial HTML for the viewer count meta tag
+  try {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    // Look for viewer count in meta tag or embedded JSON
+    const shortViewMatch = html.match(/"shortViewCountText":\s*{[^}]*"simpleText":\s*"([^"]+)"/);
+    if (shortViewMatch) {
+      const text = shortViewMatch[1];
+      // Parse "X watching" or "X views" format
+      const numMatch = text.match(/([\d,\.]+[KMB]?)/i);
+      if (numMatch) {
+        const raw = numMatch[1].replace(/,/g, "");
+        const multiplier = /K/i.test(raw) ? 1000 : /M/i.test(raw) ? 1000000 : /B/i.test(raw) ? 1000000000 : 1;
+        return Math.round(parseFloat(raw.replace(/[KMB]/gi, "")) * multiplier);
+      }
+    }
+    // Fallback: look for "viewCount" in embedded JSON
+    const viewCountMatch = html.match(/"viewCount":\s*"(\d+)"/);
+    if (viewCountMatch) {
+      return parseInt(viewCountMatch[1], 10);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Outbound chat send — Twitch first (others return clear "not wired" until
 // the corresponding OAuth flows are added).
 async function sendTwitchChatMessage({ auth, text, channel }) {
@@ -1079,6 +1115,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 400, { error: "Missing channel" }, { "Access-Control-Allow-Origin": "*" });
     }
     const viewers = await fetchKickViewers(decodeURIComponent(channel));
+    return sendJson(res, 200, { viewers }, { "Access-Control-Allow-Origin": "*" });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/viewers/youtube/")) {
+    const videoId = url.pathname.split("/api/viewers/youtube/")[1];
+    if (!videoId) {
+      return sendJson(res, 400, { error: "Missing video ID" }, { "Access-Control-Allow-Origin": "*" });
+    }
+    const viewers = await fetchYoutubeViewers(decodeURIComponent(videoId));
     return sendJson(res, 200, { viewers }, { "Access-Control-Allow-Origin": "*" });
   }
 

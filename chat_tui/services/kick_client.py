@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from collections import deque
 import logging
 from typing import Any
 
@@ -24,6 +24,7 @@ class KickClient:
         self._task: asyncio.Task | None = None
         self._chatroom_id: int | None = None
         self._last_message_ids: set[str] = set()
+        self._message_id_order: deque[str] = deque(maxlen=500)
 
     async def start(self) -> None:
         self._stop.clear()
@@ -50,12 +51,11 @@ class KickClient:
                     backoff = 2.0
                 except Exception as exc:
                     logger.debug("Kick client error: %s", exc)
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-                    return
-                except asyncio.TimeoutError:
-                    pass
-                backoff = min(backoff * 2, 30.0)
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=backoff)
+                        return
+                    except asyncio.TimeoutError:
+                        backoff = min(backoff * 2, 30.0)
 
     async def _resolve_chatroom(self, http: httpx.AsyncClient) -> None:
         if self._chatroom_id is not None:
@@ -76,20 +76,23 @@ class KickClient:
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            msg_id = msg.get("id")
-            if msg_id is None or msg_id in self._last_message_ids:
+            raw_id = msg.get("id")
+            if raw_id is None:
                 continue
-            self._last_message_ids.add(str(msg_id))
+            msg_id = str(raw_id)
+            if msg_id in self._last_message_ids:
+                continue
+            if len(self._message_id_order) == self._message_id_order.maxlen:
+                self._last_message_ids.discard(self._message_id_order[0])
+            self._message_id_order.append(msg_id)
+            self._last_message_ids.add(msg_id)
             await self.on_message({
                 "username": msg.get("sender", {}).get("username", "—"),
                 "text": msg.get("content", ""),
                 "platform": "kick",
                 "timestamp": msg.get("created_at") or msg.get("createdAt"),
-                "id": str(msg_id),
+                "id": msg_id,
             })
-            # cap memory of seen IDs
-            if len(self._last_message_ids) > 500:
-                self._last_message_ids = set(sorted(self._last_message_ids)[-250:])
         # short poll interval for chat feel
         try:
             await asyncio.wait_for(self._stop.wait(), timeout=2.0)

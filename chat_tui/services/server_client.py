@@ -62,7 +62,9 @@ class ServerClient:
 
     async def fetch_viewers(self, platform: str, channel: str) -> int | None:
         try:
-            r = await self.http.get(f"/api/viewers/{platform}/{quote(channel)}")
+            if platform not in {"twitch", "youtube", "kick"}:
+                raise ValueError(f"Unsupported platform: {platform}")
+            r = await self.http.get(f"/api/viewers/{platform}/{quote(channel, safe='')}")
             if r.status_code == 200:
                 return r.json().get("viewers")
         except Exception:
@@ -122,7 +124,7 @@ class ServerClient:
                                     except json.JSONDecodeError:
                                         pass
                                     break
-            except (httpx.HTTPError, httpx.RemoteProtocolError, Exception) as exc:
+            except Exception as exc:
                 logger.debug("SSE %s disconnected: %s", path, exc)
                 yield {"_disconnected": True}
             if self._stop.is_set():
