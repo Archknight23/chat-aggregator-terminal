@@ -35,7 +35,7 @@ class CommandHints(Static):
         text = Text()
         text.append(":: ", style="#6b6b7a")
         if getattr(self, "_compact", False):
-            text.append("Tab platform  •  F2 settings  •  Ctrl+L clear", style=C_HINT_KEY)
+            text.append("Tab platform  •  F2 settings  •  F3 log  •  Ctrl+L clear", style=C_HINT_KEY)
             return text
         text.append(
             "/settings  /clear  /raid <channel>  /platform <name>",
@@ -43,7 +43,7 @@ class CommandHints(Static):
         )
         text.append("   ")
         text.append(
-            "[tab] platform  [t] theme  [F2] settings  [ctrl+l] clear",
+            "[tab] platform  [t] theme  [F2] settings  [F3] log  [ctrl+l] clear",
             style=C_HINT_KEY,
         )
         text.append("   ")

@@ -28,7 +28,7 @@ class StatusTicker(Static):
     """
 
     items: reactive[list[dict[str, Any]]] = reactive(list)
-    max_items: int = 8
+    max_items: int = 200
 
     def __init__(self, **kwargs) -> None:
         super().__init__("", **kwargs)

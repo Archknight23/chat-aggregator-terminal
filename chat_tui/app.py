@@ -23,6 +23,7 @@ from chat_tui.bus import MSG_ALERT, MSG_CHAT, MSG_SEND_STATUS, MSG_STATUS, MSG_V
 from chat_tui.conn_state import ConnState
 from chat_tui.services.kick_client import KickClient
 from chat_tui.services.node_backend import BackendStartupError, NodeBackendSupervisor
+from chat_tui.services.remote_feed import RemoteChatFeed
 from chat_tui.services.server_client import ServerClient
 from chat_tui.services.twitch_irc import TwitchIRCClient
 from chat_tui.theme import THEME_ORDER, Theme, cycle_theme, get_theme
@@ -30,6 +31,7 @@ from chat_tui.ui.alert_log import AlertLog
 from chat_tui.ui.chat_feed import ChatFeed
 from chat_tui.ui.command_hints import CommandHints
 from chat_tui.ui.composer import Composer
+from chat_tui.ui.log_overlay import LogOverlay
 from chat_tui.ui.settings_modal import SettingsModal
 from chat_tui.ui.status_ticker import StatusTicker
 from chat_tui.ui.viewer_bar import ViewerBar
@@ -134,11 +136,18 @@ class ChatAggregatorApp(App):
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True, tooltip="Exit the application"),
+        # Letter/tab shortcuts stay priority so they work when chat/feed is focused,
+        # but each action no-ops or re-routes when a modal or text field owns focus
+        # (see action_* guards). Tab inside Settings must move fields, not platforms.
         Binding("s", "settings", "Settings", show=True, priority=True, tooltip="Open settings modal"),
         Binding("f2", "settings", "Settings", show=False, priority=True),
         Binding("c", "clear", "Clear", show=True, priority=True, tooltip="Clear chat, alerts, and ticker"),
         Binding("tab", "switch_platform", "Platform", show=True, priority=True, tooltip="Cycle through platforms (Local/Twitch/YouTube/Kick)"),
         Binding("t", "theme", "Theme", show=True, priority=True, tooltip="Cycle through color themes"),
+        # "l" is swallowed by the composer Input while typing (see comment above),
+        # same as "s" needs f2 — f3 is the reliable fallback regardless of focus.
+        Binding("l", "log", "Log", show=True, priority=True, tooltip="Open status/alert log history"),
+        Binding("f3", "log", "Log", show=False, priority=True),
         Binding("ctrl+l", "clear", "Clear", show=False, priority=True),
     ]
 
@@ -151,10 +160,11 @@ class ChatAggregatorApp(App):
         self.backend = NodeBackendSupervisor(server_url)
         self.twitch_irc: TwitchIRCClient | None = None
         self.kick: KickClient | None = None
+        self.remote_feed: RemoteChatFeed | None = None
         self._tasks: list[asyncio.Task] = []
         self._settings_task: asyncio.Task | None = None
         self._youtube_task: asyncio.Task | None = None
-        self._settings = settings.load_settings()
+        self._settings = settings.normalize(settings.load_settings())
         self._youtube_live_id: str | None = None
         self._seen_message_ids: set[str] = set()
         self._message_id_order: deque[str] = deque(maxlen=2_000)
@@ -207,6 +217,7 @@ class ChatAggregatorApp(App):
         self._settings_task = None
         await self._stop_youtube()
         await self._stop_clients()
+        await self._stop_remote_feed()
         await self.server.stop()
         await self.backend.stop()
         for task in self._tasks:
@@ -216,20 +227,42 @@ class ChatAggregatorApp(App):
             except asyncio.CancelledError:
                 pass
 
+    def _in_modal(self) -> bool:
+        return bool(getattr(self.screen, "is_modal", False))
+
     def action_settings(self) -> None:
+        if self._in_modal():
+            return
         self.push_screen(SettingsModal(), self._on_settings_closed)
 
     def action_clear(self) -> None:
+        if self._in_modal():
+            return
         self.query_one("#chat_feed", ChatFeed).clear()
         self.query_one("#ticker", StatusTicker).clear()
         self.query_one("#alert_log", AlertLog).clear()
         self._post_status("chat cleared")
 
     def action_switch_platform(self) -> None:
+        # Priority Tab binding steals focus traversal from Inputs. Inside a
+        # modal (Settings), re-route Tab to the next focusable field instead of
+        # cycling the composer platform behind the dialog.
+        if self._in_modal():
+            self.screen.focus_next()
+            return
         self.query_one("#composer", Composer).action_switch_platform()
+
+    def action_log(self) -> None:
+        if self._in_modal():
+            return
+        ticker = self.query_one("#ticker", StatusTicker)
+        alert_log = self.query_one("#alert_log", AlertLog)
+        self.push_screen(LogOverlay(list(ticker.items), list(alert_log.events)))
 
     def action_theme(self) -> None:
         """Cycle to the next theme."""
+        if self._in_modal():
+            return
         self._theme_name, self._theme = cycle_theme(self._theme_name)
         self._apply_theme()
         self._post_ticker(f"theme → {self._theme.name}", severity="info")
@@ -411,18 +444,45 @@ class ChatAggregatorApp(App):
     async def _apply_settings_async(self, cfg: dict[str, Any]) -> None:
         await self._stop_youtube()
         await self._stop_clients()
+        await self._stop_remote_feed()
+
+        cfg = settings.normalize(cfg)
+        self._settings = cfg
 
         twitch_channel = cfg.get("twitchChannel", "")
         youtube_target = cfg.get("youtubeLiveId", "")
         kick_channel = cfg.get("kickChannel", "")
+        feed_url = cfg.get("chatFeedUrl", "")
+        local_ingest = bool(cfg.get("localIngest", True))
 
-        # mark configured platforms as connecting
+        # Only paint CONNECTING for platforms we are about to dial. Remote-only
+        # mode must not leave dots stuck yellow forever (no local client ever
+        # flips them to CONNECTED).
         for platform, channel in [
             ("twitch", twitch_channel),
             ("youtube", youtube_target),
             ("kick", kick_channel),
         ]:
-            self._set_connection(platform, ConnState.CONNECTING if channel else ConnState.DISCONNECTED)
+            if local_ingest and channel:
+                self._set_connection(platform, ConnState.CONNECTING)
+            else:
+                self._set_connection(platform, ConnState.DISCONNECTED)
+
+        if feed_url:
+            try:
+                self.remote_feed = RemoteChatFeed(
+                    feed_url,
+                    on_message=lambda m: self.bus.put_nowait(MSG_CHAT, m),
+                    on_status=self._on_remote_status,
+                )
+                await self.remote_feed.start()
+                self._post_status(f"Remote feed: {feed_url}")
+            except Exception as exc:
+                self._post_ticker(f"Remote feed failed: {exc}", severity="error")
+
+        if not local_ingest:
+            self._post_status("local ingest disabled — remote feed only")
+            return
 
         if twitch_channel:
             try:
@@ -441,11 +501,12 @@ class ChatAggregatorApp(App):
             try:
                 self.kick = KickClient(
                     kick_channel,
-                    lambda m: self.bus.put_nowait(MSG_CHAT, m),
+                    on_message=lambda m: self.bus.put_nowait(MSG_CHAT, m),
+                    on_status=lambda state, detail="": self._on_kick_status(state, detail),
                 )
                 await self.kick.start()
-                self._set_connection("kick", ConnState.CONNECTED)
-                self._post_status(f"Kick polling: {kick_channel}")
+                self._set_connection("kick", ConnState.CONNECTING)
+                self._post_status(f"Kick connecting: {kick_channel}")
             except Exception as exc:
                 self._set_connection("kick", ConnState.ERROR)
                 self._post_ticker(f"Kick connect failed: {exc}", severity="error")
@@ -465,6 +526,21 @@ class ChatAggregatorApp(App):
                 self._set_connection("youtube", ConnState.ERROR)
                 self._post_ticker(f"YouTube resolve failed: {exc}", severity="error")
 
+    def _on_remote_status(self, _platform: str, state: str) -> None:
+        self.bus.put_nowait(MSG_STATUS, {"text": f"remote feed: {state}"})
+
+    def _on_kick_status(self, state: str, detail: str = "") -> None:
+        mapping = {
+            "connecting": ConnState.CONNECTING,
+            "live": ConnState.CONNECTED,
+            "error": ConnState.ERROR,
+            "degraded": ConnState.ERROR,
+        }
+        self._set_connection("kick", mapping.get(state, ConnState.DISCONNECTED))
+        if state in ("error", "degraded"):
+            note = detail or "Kick public messages API unavailable"
+            self.bus.put_nowait(MSG_STATUS, {"text": f"Kick: {note}"})
+
     async def _stop_clients(self) -> None:
         if self.twitch_irc:
             await self.twitch_irc.stop()
@@ -472,6 +548,11 @@ class ChatAggregatorApp(App):
         if self.kick:
             await self.kick.stop()
             self.kick = None
+
+    async def _stop_remote_feed(self) -> None:
+        if self.remote_feed:
+            await self.remote_feed.stop()
+            self.remote_feed = None
 
     async def _stop_youtube(self) -> None:
         task = self._youtube_task
